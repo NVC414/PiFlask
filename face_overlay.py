@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+from picamera2 import Picamera2
 
 def overlay_rgba(bg_bgr, fg_rgba, x, y, w, h):
     H, W = bg_bgr.shape[:2]
@@ -43,32 +44,29 @@ def load_cascade():
         c = cv2.CascadeClassifier(p)
         if not c.empty():
             return c
-    raise RuntimeError("Could not load Haar cascade. Ensure opencv-data is installed.")
+    raise RuntimeError("Could not load Haar cascade (install opencv-data).")
 
 def main():
     mask = cv2.imread("mask.png", cv2.IMREAD_UNCHANGED)
     if mask is None:
         raise RuntimeError("mask.png not found in the current folder.")
     if len(mask.shape) != 3 or mask.shape[2] != 4:
-        raise RuntimeError("mask.png must be a transparent PNG with alpha (RGBA).")
+        raise RuntimeError("mask.png must be RGBA (transparent PNG).")
 
-    face_cascade = load_cascade()
+    cascade = load_cascade()
 
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        raise RuntimeError("Camera not opened via /dev/video0. If libcamera-hello works but /dev/video0 is missing, you need a different capture method.")
-
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    picam2 = Picamera2()
+    config = picam2.create_preview_configuration(
+        main={"format": "BGR888", "size": (1280, 720)}
+    )
+    picam2.configure(config)
+    picam2.start()
 
     while True:
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            break
-
+        frame = picam2.capture_array()
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        faces = face_cascade.detectMultiScale(
+        faces = cascade.detectMultiScale(
             gray,
             scaleFactor=1.08,
             minNeighbors=4,
@@ -85,11 +83,10 @@ def main():
             frame = overlay_rgba(frame, mask, x0, y0, w0, h0)
 
         cv2.imshow("Face Overlay", frame)
-        k = cv2.waitKey(1) & 0xFF
-        if k == ord("q"):
+        if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
-    cap.release()
+    picam2.stop()
     cv2.destroyAllWindows()
 
 if __name__ == "__main__":
