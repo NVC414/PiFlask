@@ -13,9 +13,7 @@ CONF_THRESH = 0.60
 SQUARE_SCALE = 1.35
 SQUARE_Y_SHIFT = -0.10
 
-GAIN_R_BIAS = 0.05
-GAIN_B_BIAS = -0.15
-SATURATION = 1.15
+AWB_SETTLE_SECONDS = 0.6
 
 app = Flask(__name__)
 
@@ -105,13 +103,7 @@ def init_once():
     picam2.configure(cfg)
     picam2.start()
 
-    time.sleep(2)
-    md = picam2.capture_metadata()
-    cg = md.get("ColourGains")
-    if cg is not None:
-        r = float(cg[0]) + GAIN_R_BIAS
-        b = max(0.5, float(cg[1]) + GAIN_B_BIAS)
-        picam2.set_controls({"AwbEnable": False, "ColourGains": (r, b), "Saturation": SATURATION})
+    picam2.set_controls({"AwbEnable": True})
 
     STATE["mask"] = mask
     STATE["net"] = net
@@ -142,11 +134,21 @@ def detect_faces_dnn(frame_bgr, net, conf_thresh):
             boxes.append((x1, y1, bw, bh))
     return boxes
 
+def lock_awb_for_shot(picam2):
+    picam2.set_controls({"AwbEnable": True})
+    time.sleep(AWB_SETTLE_SECONDS)
+    md = picam2.capture_metadata()
+    cg = md.get("ColourGains")
+    if cg is not None:
+        picam2.set_controls({"AwbEnable": False, "ColourGains": (float(cg[0]), float(cg[1]))})
+
 def capture_with_overlay():
     init_once()
     picam2 = STATE["picam2"]
     net = STATE["net"]
     mask = STATE["mask"]
+
+    lock_awb_for_shot(picam2)
 
     frame = picam2.capture_array()
 
@@ -157,10 +159,8 @@ def capture_with_overlay():
         cy = y + h // 2
         side = int(max(w, h) * SQUARE_SCALE)
         cy = int(cy + SQUARE_Y_SHIFT * side)
-
         x0 = cx - side // 2
         y0 = cy - side // 2
-
         frame = overlay_rgba(frame, mask, x0, y0, side, side)
 
     ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
