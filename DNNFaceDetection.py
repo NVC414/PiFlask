@@ -8,7 +8,14 @@ from datetime import datetime
 
 MODE_SIZE = (1296, 972)
 DNN_INPUT_SIZE = (300, 300)
-CONF_THRESH = 0.55
+CONF_THRESH = 0.60
+
+SQUARE_SCALE = 1.35
+SQUARE_Y_SHIFT = -0.10
+
+GAIN_R_BIAS = 0.05
+GAIN_B_BIAS = -0.15
+SATURATION = 1.15
 
 app = Flask(__name__)
 
@@ -102,7 +109,9 @@ def init_once():
     md = picam2.capture_metadata()
     cg = md.get("ColourGains")
     if cg is not None:
-        picam2.set_controls({"AwbEnable": False, "ColourGains": cg})
+        r = float(cg[0]) + GAIN_R_BIAS
+        b = max(0.5, float(cg[1]) + GAIN_B_BIAS)
+        picam2.set_controls({"AwbEnable": False, "ColourGains": (r, b), "Saturation": SATURATION})
 
     STATE["mask"] = mask
     STATE["net"] = net
@@ -144,9 +153,15 @@ def capture_with_overlay():
     faces = detect_faces_dnn(frame, net, CONF_THRESH)
 
     for (x, y, w, h) in faces:
-        pad_w = int(0.10 * w)
-        pad_h = int(0.25 * h)
-        frame = overlay_rgba(frame, mask, x - pad_w, y - pad_h, w + 2 * pad_w, h + 2 * pad_h)
+        cx = x + w // 2
+        cy = y + h // 2
+        side = int(max(w, h) * SQUARE_SCALE)
+        cy = int(cy + SQUARE_Y_SHIFT * side)
+
+        x0 = cx - side // 2
+        y0 = cy - side // 2
+
+        frame = overlay_rgba(frame, mask, x0, y0, side, side)
 
     ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
     if not ok:
