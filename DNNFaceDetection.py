@@ -5,8 +5,27 @@ import time
 from picamera2 import Picamera2
 import threading
 from datetime import datetime
+import random
+import os
 
-MODE_SIZE = (1296, 972)
+AVAILABLE_RESOLUTIONS = [
+    (640, 480),
+    (1296, 972),
+    (1920, 1080),
+    (2592, 1944),
+]
+
+AVAILABLE_FILTER_MODES = [
+    "color",
+    "mono",
+]
+
+MODE_SIZE = random.choice(AVAILABLE_RESOLUTIONS)
+FILTER_MODE = random.choice(AVAILABLE_FILTER_MODES)
+
+MASK_FOLDER = "masks"
+MASK_COUNT = 6
+
 DNN_INPUT_SIZE = (300, 300)
 CONF_THRESH = 0.60
 
@@ -20,7 +39,7 @@ app = Flask(__name__)
 STATE = {
     "picam2": None,
     "net": None,
-    "mask": None,
+    "masks": None,
     "lock": threading.Lock(),
 }
 
@@ -34,10 +53,13 @@ HTML = """
       body { font-family: sans-serif; padding: 16px; }
       button { font-size: 18px; padding: 14px 18px; width: 100%; }
       img { width: 100%; margin-top: 16px; border-radius: 8px; }
+      p { margin: 8px 0; }
     </style>
   </head>
   <body>
     <button onclick="capture()">Take photo</button>
+    <p>Resolution: {{ res[0] }}x{{ res[1] }}</p>
+    <p>Filter mode: {{ filt }}</p>
     <img id="out" />
     <script>
       async function capture() {
@@ -88,30 +110,57 @@ def overlay_rgba(bg_bgr, fg_rgba, x, y, w, h):
     bg_bgr[y1:y2, x1:x2] = out.astype(np.uint8)
     return bg_bgr
 
+def apply_filter_mode(frame_bgr):
+    if FILTER_MODE == "mono":
+        g = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+        return cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
+    return frame_bgr
+
+def load_masks():
+    masks = []
+    for i in range(1, MASK_COUNT + 1):
+        path = os.path.join(MASK_FOLDER, f"mask{i}.png")
+        m = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+        if m is None or len(m.shape) != 3 or m.shape[2] != 4:
+            continue
+        masks.append(m)
+    if not masks:
+        raise RuntimeError("No valid RGBA masks found in masks/ as mask1.png..maskN.png")
+    return masks
+
 def init_once():
     if STATE["picam2"] is not None:
         return
 
-    mask = cv2.imread("mask.png", cv2.IMREAD_UNCHANGED)
-    if mask is None or len(mask.shape) != 3 or mask.shape[2] != 4:
-        raise RuntimeError("mask.png must be RGBA")
+    net = cv2.dnn.readNetFromCaffe(
+        "deploy.prototxt",
+        "res10_300x300_ssd_iter_140000.caffemodel"
+    )
 
-    net = cv2.dnn.readNetFromCaffe("deploy.prototxt", "res10_300x300_ssd_iter_140000.caffemodel")
+    masks = load_masks()
 
     picam2 = Picamera2()
-    cfg = picam2.create_preview_configuration(main={"format": "BGR888", "size": MODE_SIZE})
+    cfg = picam2.create_preview_configuration(
+        main={"format": "BGR888", "size": MODE_SIZE}
+    )
     picam2.configure(cfg)
     picam2.start()
-
     picam2.set_controls({"AwbEnable": True})
 
-    STATE["mask"] = mask
+    STATE["masks"] = masks
     STATE["net"] = net
     STATE["picam2"] = picam2
 
 def detect_faces_dnn(frame_bgr, net, conf_thresh):
     h, w = frame_bgr.shape[:2]
-    blob = cv2.dnn.blobFromImage(frame_bgr, 1.0, DNN_INPUT_SIZE, (104.0, 177.0, 123.0), swapRB=False, crop=False)
+    blob = cv2.dnn.blobFromImage(
+        frame_bgr,
+        1.0,
+        DNN_INPUT_SIZE,
+        (104.0, 177.0, 123.0),
+        swapRB=False,
+        crop=False
+    )
     net.setInput(blob)
     det = net.forward()
 
@@ -140,21 +189,26 @@ def lock_awb_for_shot(picam2):
     md = picam2.capture_metadata()
     cg = md.get("ColourGains")
     if cg is not None:
-        picam2.set_controls({"AwbEnable": False, "ColourGains": (float(cg[0]), float(cg[1]))})
+        picam2.set_controls({
+            "AwbEnable": False,
+            "ColourGains": (float(cg[0]), float(cg[1]))
+        })
 
 def capture_with_overlay():
     init_once()
     picam2 = STATE["picam2"]
     net = STATE["net"]
-    mask = STATE["mask"]
+    masks = STATE["masks"]
 
     lock_awb_for_shot(picam2)
 
     frame = picam2.capture_array()
+    frame = apply_filter_mode(frame)
 
     faces = detect_faces_dnn(frame, net, CONF_THRESH)
 
     for (x, y, w, h) in faces:
+        mask = random.choice(masks)
         cx = x + w // 2
         cy = y + h // 2
         side = int(max(w, h) * SQUARE_SCALE)
@@ -176,7 +230,7 @@ def capture_with_overlay():
 
 @app.get("/")
 def index():
-    return render_template_string(HTML)
+    return render_template_string(HTML, res=MODE_SIZE, filt=FILTER_MODE)
 
 @app.post("/capture")
 def capture():
@@ -187,4 +241,6 @@ def capture():
     return r
 
 if __name__ == "__main__":
+    print("Random resolution selected:", MODE_SIZE)
+    print("Random filter mode selected:", FILTER_MODE)
     app.run(host="0.0.0.0", port=5000, threaded=True)
