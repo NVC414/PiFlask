@@ -162,7 +162,11 @@ def init_once():
     if STATE["picam2"] is not None:
         return
 
-    net = cv2.dnn.readNetFromCaffe("deploy.prototxt", "res10_300x300_ssd_iter_140000.caffemodel")
+    base = os.path.dirname(os.path.abspath(__file__))
+    proto = os.path.join(base, "deploy.prototxt")
+    model = os.path.join(base, "res10_300x300_ssd_iter_140000.caffemodel")
+    net = cv2.dnn.readNetFromCaffe(proto, model)
+
     masks = load_masks()
 
     picam2 = Picamera2()
