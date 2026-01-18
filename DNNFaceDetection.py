@@ -18,6 +18,7 @@ MODE_SIZE = (1296, 972)
 AWB_PRESETS = ["auto", "daylight", "tungsten", "fluorescent", "indoor", "cloudy"]
 
 MASK_FOLDER = "masks"
+OVERLAY_FOLDER = "overlays"
 
 DNN_INPUT_SIZE = (300, 300)
 CONF_THRESH = 0.60
@@ -34,6 +35,7 @@ STATE = {
     "picam2": None,
     "net": None,
     "masks": None,
+    "overlays": None,
     "lock": threading.Lock(),
     "filter_mode": "color",
     "awb_mode": "auto",
@@ -120,21 +122,29 @@ def apply_filter_mode(frame_bgr):
         return cv2.cvtColor(g, cv2.COLOR_GRAY2BGR)
     return frame_bgr
 
-def load_masks():
-    masks = []
-    for name in os.listdir(MASK_FOLDER):
+def load_rgba_pngs_from_folder(folder):
+    if not os.path.isdir(folder):
+        return []
+    out = []
+    for name in os.listdir(folder):
         if not name.lower().endswith(".png"):
             continue
-        path = os.path.join(MASK_FOLDER, name)
+        path = os.path.join(folder, name)
         m = cv2.imread(path, cv2.IMREAD_UNCHANGED)
         if m is None:
             continue
         if len(m.shape) == 3 and m.shape[2] == 4:
-            masks.append(m)
+            out.append(m)
+    return out
+
+def load_masks():
+    masks = load_rgba_pngs_from_folder(MASK_FOLDER)
     if not masks:
         raise RuntimeError("No valid RGBA PNG masks found in masks/")
     return masks
 
+def load_overlays():
+    return load_rgba_pngs_from_folder(OVERLAY_FOLDER)
 
 def awb_enum(mode):
     if controls is None:
@@ -170,6 +180,7 @@ def init_once():
     net = cv2.dnn.readNetFromCaffe(proto, model)
 
     masks = load_masks()
+    overlays = load_overlays()
 
     picam2 = Picamera2()
     cfg = picam2.create_preview_configuration(main={"format": "BGR888", "size": MODE_SIZE})
@@ -178,6 +189,7 @@ def init_once():
 
     STATE["net"] = net
     STATE["masks"] = masks
+    STATE["overlays"] = overlays
     STATE["picam2"] = picam2
 
     apply_awb_mode(picam2)
@@ -228,6 +240,7 @@ def capture_with_overlay():
     picam2 = STATE["picam2"]
     net = STATE["net"]
     masks = STATE["masks"]
+    overlays = STATE["overlays"] or []
 
     lock_awb_for_shot(picam2)
 
@@ -245,6 +258,11 @@ def capture_with_overlay():
         x0 = cx - side // 2
         y0 = cy - side // 2
         frame = overlay_rgba(frame, mask, x0, y0, side, side)
+
+    if overlays:
+        ov = random.choice(overlays)
+        H, W = frame.shape[:2]
+        frame = overlay_rgba(frame, ov, 0, 0, W, H)
 
     ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
     if not ok:
