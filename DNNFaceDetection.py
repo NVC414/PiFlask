@@ -18,7 +18,6 @@ MODE_SIZE = (1296, 972)
 AWB_PRESETS = ["auto", "daylight", "tungsten", "fluorescent", "indoor", "cloudy"]
 
 MASK_FOLDER = "masks"
-MASK_COUNT = 6
 
 DNN_INPUT_SIZE = (300, 300)
 CONF_THRESH = 0.60
@@ -123,16 +122,19 @@ def apply_filter_mode(frame_bgr):
 
 def load_masks():
     masks = []
-    for i in range(1, MASK_COUNT + 1):
-        path = os.path.join(MASK_FOLDER, f"mask{i}.png")
+    for name in os.listdir(MASK_FOLDER):
+        if not name.lower().endswith(".png"):
+            continue
+        path = os.path.join(MASK_FOLDER, name)
         m = cv2.imread(path, cv2.IMREAD_UNCHANGED)
         if m is None:
             continue
         if len(m.shape) == 3 and m.shape[2] == 4:
             masks.append(m)
     if not masks:
-        raise RuntimeError("No valid RGBA masks found in masks/ as mask1.png..maskN.png")
+        raise RuntimeError("No valid RGBA PNG masks found in masks/")
     return masks
+
 
 def awb_enum(mode):
     if controls is None:
