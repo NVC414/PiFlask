@@ -18,6 +18,7 @@ MODE_SIZE = (1296, 972)
 AWB_PRESETS = ["auto", "daylight", "tungsten", "fluorescent", "indoor", "cloudy"]
 
 MASK_FOLDER = "masks"
+TEXT_FOLDER = "text"
 OVERLAY_FOLDER = "overlays"
 
 DNN_INPUT_SIZE = (300, 300)
@@ -35,6 +36,7 @@ STATE = {
     "picam2": None,
     "net": None,
     "masks": None,
+    "texts": None,
     "overlays": None,
     "lock": threading.Lock(),
     "filter_mode": "color",
@@ -143,6 +145,9 @@ def load_masks():
         raise RuntimeError("No valid RGBA PNG masks found in masks/")
     return masks
 
+def load_texts():
+    return load_rgba_pngs_from_folder(TEXT_FOLDER)
+
 def load_overlays():
     return load_rgba_pngs_from_folder(OVERLAY_FOLDER)
 
@@ -180,6 +185,7 @@ def init_once():
     net = cv2.dnn.readNetFromCaffe(proto, model)
 
     masks = load_masks()
+    texts = load_texts()
     overlays = load_overlays()
 
     picam2 = Picamera2()
@@ -189,6 +195,7 @@ def init_once():
 
     STATE["net"] = net
     STATE["masks"] = masks
+    STATE["texts"] = texts
     STATE["overlays"] = overlays
     STATE["picam2"] = picam2
 
@@ -235,11 +242,12 @@ def reroll_modes_internal():
     if STATE["picam2"] is not None:
         apply_awb_mode(STATE["picam2"])
 
-def capture_with_overlay():
+def capture_with_layers():
     init_once()
     picam2 = STATE["picam2"]
     net = STATE["net"]
     masks = STATE["masks"]
+    texts = STATE["texts"] or []
     overlays = STATE["overlays"] or []
 
     lock_awb_for_shot(picam2)
@@ -259,9 +267,14 @@ def capture_with_overlay():
         y0 = cy - side // 2
         frame = overlay_rgba(frame, mask, x0, y0, side, side)
 
+    H, W = frame.shape[:2]
+
+    if texts:
+        tx = random.choice(texts)
+        frame = overlay_rgba(frame, tx, 0, 0, W, H)
+
     if overlays:
         ov = random.choice(overlays)
-        H, W = frame.shape[:2]
         frame = overlay_rgba(frame, ov, 0, 0, W, H)
 
     ok, jpg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
@@ -295,7 +308,7 @@ def reroll():
 @app.post("/capture")
 def capture():
     with STATE["lock"]:
-        data = capture_with_overlay()
+        data = capture_with_layers()
     r = Response(data, mimetype="image/jpeg")
     r.headers["Cache-Control"] = "no-store"
     return r
