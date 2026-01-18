@@ -298,7 +298,7 @@ def index():
             filt=STATE["filter_mode"],
             awb=STATE["awb_mode"],
         )
-
+#slllllllllllll
 @app.post("/reroll")
 def reroll():
     with STATE["lock"]:
